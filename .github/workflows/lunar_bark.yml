@@ -1,0 +1,50 @@
+name: 农历提醒通知（仅初一与十五）
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 1 * * *'  # 每天 UTC 1 点（北京时间9点）
+
+jobs:
+  lunar-bark-reminder:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 获取今天农历日期并判断是否初一或十五
+        id: lunar_check
+        run: |
+          res=$(curl -s "https://v3.alapi.cn/api/lunar?token=${{ secrets.ALAPI_TOKEN }}")
+          lunar_day=$(echo "$res" | jq -r '.data.lunar_day_chinese')
+          echo "今天是农历 $lunar_day"
+
+          # 只在初一或十五继续执行
+          if [[ "$lunar_day" == "初一" || "$lunar_day" == "十五" ]]; then
+            echo "continue=true" >> $GITHUB_OUTPUT
+            echo "LUNAR_DAY=$lunar_day" >> $GITHUB_ENV
+          else
+            echo "continue=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 翻译任务状态为中文
+        if: steps.lunar_check.outputs.continue == 'true'
+        run: |
+          case "${{ job.status }}" in
+            success) echo "translated_status=成功" >> $GITHUB_ENV ;;
+            failure) echo "translated_status=失败" >> $GITHUB_ENV ;;
+            cancelled) echo "translated_status=取消" >> $GITHUB_ENV ;;
+            *) echo "translated_status=未知" >> $GITHUB_ENV ;;
+          esac
+
+      - name: 推送通知到 Bark
+        if: steps.lunar_check.outputs.continue == 'true'
+        run: |
+          curl -X POST "${{ secrets.BARK_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "body": "农历提醒 - 运行'"${{ env.translated_status }}"'",
+              "title": "今天是农历'"${{ env.LUNAR_DAY }}"'，记得给菩萨上香烧纸！",
+              "badge": 1,
+              "sound": "multiwayinvitation.caf",
+              "icon": "https://gw.alicdn.com/imgextra/O1CN01YM73Yc1qcpviNoMYR_!!6000000005517-2-yinhe.png_.webp",
+              "group": "Github Actions"
+            }'
